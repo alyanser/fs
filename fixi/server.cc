@@ -504,6 +504,9 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		{"STATUSRESP", on_statusresp_received},
 	};
 
+	// send the initial JOIN command
+	send_botnet_message(craft::join_packet());
+
 	std::thread sending_msgs_thread([&botnet_sock, send_botnet_message](){
 
 		while(true){
@@ -528,9 +531,6 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			std::this_thread::sleep_for(std::chrono::seconds(5));
 		}
 	});
-
-	// send the initial JOIN command
-	send_botnet_message(craft::join_packet());
 
 	while(true){
 
