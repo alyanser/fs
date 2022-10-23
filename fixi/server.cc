@@ -281,7 +281,6 @@ std::string statusresp_packet(const std::string & to_group_id) noexcept {
 void handle_botnet_server(Tcp_socket & botnet_sock){
 
 	auto send_botnet_message = [&botnet_sock](const std::string & msg){
-		util::log(std::cout, "SENDING MSG >>  ", msg);
 		botnet_sock.send(SOH + msg + EOT);
 	};
 
@@ -343,6 +342,10 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 		for(auto & new_group : new_groups){
 
+			if(new_group.id.empty()){
+				continue;
+			}
+
 			for(const auto & pair : connected_groups){
 				const auto & connected_group = pair.second;
 
@@ -352,7 +355,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 				{	// add group information to pending connections. other thread will use it to form new connections with botnet
 					std::lock_guard<std::mutex> pending_connections_guard(pending_connections_mtx);
-					pending_connections.push(std::move(new_group));
+					pending_connections.push(new_group);
 				}
 
 				// if connection limit isn't reached then inform other thread to form the connection
@@ -409,6 +412,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 			for(const auto & pending_msg : pending_group_msgs){
 				send_botnet_message(craft::send_msg_packet(for_group_id, pending_msg.from_group_id, pending_msg.content));
+				util::log_message_to_file(for_group_id, pending_msg.from_group_id, pending_msg.content);
 			}
 
 			pending_msgs.erase(for_group_id);
@@ -500,25 +504,28 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		{"STATUSRESP", on_statusresp_received},
 	};
 
-	std::thread sending_msgs_thread([&botnet_sock](){
+	std::thread sending_msgs_thread([&botnet_sock, send_botnet_message](){
 
 		while(true){
-			std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
-			auto & connected_group_id = connected_groups[botnet_sock.fd()].id;
 
-			std::lock_guard<std::mutex> pending_msgs_guard(pending_connections_mtx);
+			{
+				std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
+				auto & connected_group_id = connected_groups[botnet_sock.fd()].id;
 
-			if(pending_msgs.count(connected_group_id)){
-				auto & pending_group_msgs = pending_msgs[connected_group_id];
+				std::lock_guard<std::mutex> pending_msgs_guard(pending_connections_mtx);
 
-				try{
-					botnet_sock.send(craft::keepalive_packet(static_cast<int>(pending_group_msgs.size())));
-				}catch(const std::exception & exception){
-					return;
+				if(pending_msgs.count(connected_group_id)){
+					auto & pending_group_msgs = pending_msgs[connected_group_id];
+
+					try{
+						send_botnet_message(craft::keepalive_packet(static_cast<int>(pending_group_msgs.size())));
+					}catch(const std::exception & exception){
+						return;
+					}
 				}
 			}
 
-			std::this_thread::sleep_for(std::chrono::seconds(2));
+			std::this_thread::sleep_for(std::chrono::seconds(5));
 		}
 	});
 
@@ -526,32 +533,38 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 	send_botnet_message(craft::join_packet());
 
 	while(true){
-		auto msg = botnet_sock.recv();
 
-		if(msg.empty()){ // the server closed the connection
+		try{
+			auto msg = botnet_sock.recv();
+
+			if(msg.empty()){ // the server closed the connection
+				break;
+			}
+
+			for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
+				const auto cur_msg = msg.substr(1, eot_idx - 1);
+				util::log(std::cout, "RECEIVED MSG >>  ", cur_msg);
+				msg = eot_idx + 1 < msg.size() ? msg.substr(eot_idx + 1) : "";
+
+				// convert the string into tokens for ease of parsing
+				tokens = util::tokenize_string(cur_msg, {';', ','});
+
+				if(tokens.empty()){ // invalid packet
+					on_invalid_command_received();
+					continue;
+				}
+
+				const auto & cmd = tokens.front();
+
+				try{
+					cmd_mapping.at(cmd)(); // call the specific handler
+				}catch(const std::exception & exception){
+					on_invalid_command_received();
+				}
+			}
+
+		}catch(const std::exception & exception){
 			break;
-		}
-
-		for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
-			const auto cur_msg = msg.substr(1, eot_idx);
-			util::log(std::cout, "RECEIVED MSG >>  ", cur_msg);
-			msg = eot_idx + 1 < msg.size() ? msg.substr(eot_idx + 1) : "";
-
-			// convert the string into tokens for ease of parsing
-			tokens = util::tokenize_string(cur_msg, {';', ','});
-
-			if(tokens.empty()){ // invalid packet
-				on_invalid_command_received();
-				continue;
-			}
-
-			const auto & cmd = tokens.front();
-
-			try{
-				cmd_mapping.at(cmd)(); // call the specific handler
-			}catch(const std::exception & exception){
-				on_invalid_command_received();
-			}
 		}
 	}
 
@@ -590,7 +603,7 @@ int main(int argc, char ** argv){
 	util::log(std::cout, "starting the server with group-id: ", SELF_GROUP_ID, " ...");
 
 	// start client listener thread
-	std::thread([client_port_num](){
+	std::thread client_listener_thread([client_port_num](){
 		util::log(std::cout, "starting client thread...");
 		Tcp_socket client_listen_sock;
 
@@ -625,7 +638,7 @@ int main(int argc, char ** argv){
 				util::log<util::Log_type::ERROR>(std::cerr, exception.what());
 			}
 		}
-	}).detach();
+	});
 
 	// initiates a separate thread for botnet server
 	auto post_botnet_socket = [](Tcp_socket botnet_sock, Group associated_group){
@@ -659,7 +672,7 @@ int main(int argc, char ** argv){
 	};
 
 	// start botnet listener thread
-	std::thread([post_botnet_socket](){
+	std::thread botnet_listener_thread([post_botnet_socket](){
 		util::log(std::cout, "starting botnet thread...");
 
 		Tcp_socket botnet_listen_sock;
@@ -712,7 +725,7 @@ int main(int argc, char ** argv){
 				util::log<util::Log_type::ERROR>(std::cerr, exception.what());
 			}
 		}
-	}).detach();
+	});
 
 	// main thread itself checks if there are any pending connections, if so then attempts to those botnet servers
 	while(true){
@@ -722,8 +735,7 @@ int main(int argc, char ** argv){
 			return !pending_connections.empty();
 		});
 
-		auto new_group = std::move(pending_connections.top());
-		util::log(std::cout, "DEBUG >> ", std::string(new_group));
+		const auto new_group = pending_connections.top();
 		pending_connections.pop();
 
 		lock.unlock();
