@@ -2,3 +2,5 @@ message-logs.txt
 *.o
 client
 tsamP3_GROUP_2
+compile_commands.json
+.cache

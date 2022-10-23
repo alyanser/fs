@@ -13,7 +13,7 @@
 
 #include "tcp_socket.h"
 
-constexpr auto CLIENT_PORT_NUM = 9001;
+constexpr auto DEFAULT_CLIENT_PORT_NUM = 9001;
 constexpr auto MAX_CONNECTIONS = 16;
 constexpr char SOH = 0x1; // start of heading
 constexpr char EOT = 0x4; // end of transmissoin
@@ -552,16 +552,29 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 int main(int argc, char ** argv){
 
-	if(argc != 2){
-		std::cerr << "Usage: " << argv[0] << " botnet_port_number\n";
+	if(argc < 2 && argc > 3){
+		std::cerr << "Usage: " << argv[0] << " botnet_port_number client_port_number(DEFAULT=" << DEFAULT_CLIENT_PORT_NUM << ")\n";
 		return 1;
 	}
 
 	try{
 		self_group.port_num = std::stoi(std::string(argv[1]));
 	}catch(const std::exception & exception){
-		std::cerr << "Error: invalid port number\n";
+		std::cerr << "Error: invalid botnet port number\n";
 		return 1;
+	}
+
+	int client_port_num;
+
+	if(argc == 2){
+		client_port_num = DEFAULT_CLIENT_PORT_NUM;
+	}else{
+		try{
+			client_port_num = std::stoi(std::string(argv[2]));
+		}catch(const std::exception & exception){
+			std::cerr << "Error: invalid client port number\n";
+			return 1;
+		}
 	}
 
 	// make sure SIGPIPE doesn't close the server
@@ -569,15 +582,15 @@ int main(int argc, char ** argv){
 	util::log(std::cout, "starting the server with group-id: ", SELF_GROUP_ID, " ...");
 
 	// start client listener thread
-	std::thread client_listen_thread([](){
+	std::thread client_listen_thread([client_port_num](){
 		util::log(std::cout, "starting client thread...");
 		Tcp_socket client_listen_sock;
 
 		client_listen_sock.set_option(SO_REUSEADDR);
-		client_listen_sock.bind(CLIENT_PORT_NUM);
+		client_listen_sock.bind(client_port_num);
 		client_listen_sock.listen();
 
-		util::log(std::cout, "listening for clients on port # ", CLIENT_PORT_NUM, " ...");
+		util::log(std::cout, "listening for clients on port # ", client_port_num, " ...");
 
 		std::vector<std::thread> client_threads;
 
