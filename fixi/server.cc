@@ -281,13 +281,15 @@ std::string statusresp_packet(const std::string & to_group_id) noexcept {
 void handle_botnet_server(Tcp_socket & botnet_sock){
 
 	auto send_botnet_message = [&botnet_sock](const std::string & msg){
+		util::log(std::cout, "SENDING MSG >>  ", msg);
 		botnet_sock.send(SOH + msg + EOT);
 	};
 
 	std::vector<std::string> tokens;
+	std::string msg;
 
-	auto on_invalid_command_received = [&botnet_sock](){
-		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command. ");
+	auto on_invalid_command_received = [&botnet_sock, &msg](){
+		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command >> ", msg);
 	};
 
 	auto on_join_received = [&](){
@@ -515,7 +517,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			}
 		}
 
-		auto msg = botnet_sock.recv();
+		msg = botnet_sock.recv();
 
 		if(msg.empty()){ // the server closed the connection
 			return;
@@ -523,6 +525,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 		for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
 			const auto cur_msg = msg.substr(1, eot_idx);
+			util::log(std::cout, "RECEIVED MSG >>  ", cur_msg);
 			msg = eot_idx + 1 < msg.size() ? msg.substr(eot_idx + 1) : "";
 
 			// convert the string into tokens for ease of parsing
