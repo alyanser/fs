@@ -721,7 +721,7 @@ int main(int argc, char ** argv){
 
 		lock.unlock();
 
-		util::log(std::cout, "attempting to connect to a new botnet server...");
+		util::log(std::cout, "attempting to connect to a new botnet server (", std::string(new_group), ")...");
 
 		try{
 			Tcp_socket botnet_sock;
