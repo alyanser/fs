@@ -421,17 +421,17 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		const auto & to_group_id = tokens[1];
 		const auto & from_group_id = tokens[2];
 
-		std::string msg;
+		std::string send_msg;
 
 		for(std::size_t i = 3; i < tokens.size(); ++i){
-			msg += tokens[i];
+			send_msg += tokens[i];
 		}
 
-		util::log_message_to_file(to_group_id, from_group_id, msg);
+		util::log_message_to_file(to_group_id, from_group_id, send_msg);
 
 		if(to_group_id != SELF_GROUP_ID){ // if this message was for us, then stop otherwise add it back to be shared to the botnet
 			std::lock_guard<std::mutex> guard(pending_msgs_mtx);
-			pending_msgs[to_group_id].emplace_back(Message{msg, from_group_id});
+			pending_msgs[to_group_id].emplace_back(Message{send_msg, from_group_id});
 		}
 	};
 
