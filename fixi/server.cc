@@ -532,7 +532,6 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 			for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
 				const auto cur_msg = msg.substr(1, eot_idx - 1);
-				util::log(std::cout, "RECEIVED >> ", cur_msg);
 				msg = eot_idx + 1 < msg.size() ? msg.substr(eot_idx + 1) : "";
 
 				// convert the string into tokens for ease of parsing
