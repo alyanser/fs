@@ -321,6 +321,10 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			auto & ip = tokens[i + 1];
 			auto & port = tokens[i + 2];
 
+			if(group_id == SELF_GROUP_ID){
+				continue;
+			}
+
 			int port_num;
 
 			try{
@@ -376,10 +380,10 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			return;
 		}
 
-		if(no_of_msgs > 0){ // if the botnet server has any message for us, send FETCH_MSGS command
-			util::log(std::cout, "sending FETCH_MSG command to botnet server # ", botnet_sock.fd());
-			send_botnet_message(craft::fetch_msg_packet(SELF_GROUP_ID));
-		}
+		static_cast<void>(no_of_msgs);
+
+		util::log(std::cout, "sending FETCH_MSG command to botnet server # ", botnet_sock.fd());
+		send_botnet_message(craft::fetch_msg_packet(SELF_GROUP_ID));
 	};
 
 	auto on_fetch_msgs_received = [&](){
