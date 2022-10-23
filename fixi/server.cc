@@ -316,12 +316,13 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 		std::vector<Group> new_groups;
 
-		for(std::size_t i = 1; i + 2 < tokens.size(); i += 3){
+		for(std::size_t i = 4; i + 2 < tokens.size(); i += 3){
 			auto & group_id = tokens[i];
 			auto & ip = tokens[i + 1];
 			auto & port = tokens[i + 2];
 
-			if(group_id == SELF_GROUP_ID){
+			if(group_id.empty()){
+				on_invalid_command_received();
 				continue;
 			}
 
@@ -344,7 +345,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			for(const auto & pair : connected_groups){
 				const auto & connected_group = pair.second;
 
-				if(new_group.id == connected_group.id){ // if already connected to the group, then skip it
+				if(new_group.id == connected_group.id || new_group.id == SELF_GROUP_ID){
 					continue;
 				}
 
@@ -380,10 +381,10 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			return;
 		}
 
-		static_cast<void>(no_of_msgs);
-
-		util::log(std::cout, "sending FETCH_MSG command to botnet server # ", botnet_sock.fd());
-		send_botnet_message(craft::fetch_msg_packet(SELF_GROUP_ID));
+		if(no_of_msgs > 0){
+			util::log(std::cout, "sending FETCH_MSG command to botnet server # ", botnet_sock.fd());
+			send_botnet_message(craft::fetch_msg_packet(SELF_GROUP_ID));
+		}
 	};
 
 	auto on_fetch_msgs_received = [&](){
@@ -503,21 +504,16 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 	while(true){
 
-		{	// check if there is any pending message for this 1-hop server, if so then send it immediately
+		{	// check if there is any pending message for this 1-hop server, if so then send keepalive command
 			std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
 			const auto & botnet_server_group = connected_groups[botnet_sock.fd()].id;
 
+			util::log(std::cout, "DEBUG SERVER GROUP ID >> ", botnet_server_group);
 			std::lock_guard<std::mutex> pending_msgs_guard(pending_msgs_mtx);
 
 			if(pending_msgs.count(botnet_server_group)){
 				auto & pending_group_msgs = pending_msgs[botnet_server_group];
-
-				if(!pending_group_msgs.empty()){
-					const auto pending_msg = std::move(pending_group_msgs.front());
-					pending_group_msgs.pop_front();
-
-					send_botnet_message(craft::send_msg_packet(botnet_server_group, pending_msg.from_group_id, pending_msg.content));
-				}
+				send_botnet_message(craft::keepalive_packet(static_cast<int>(pending_group_msgs.size())));
 			}
 		}
 
