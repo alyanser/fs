@@ -7,7 +7,7 @@
 #include <mutex>
 #include <functional>
 #include <deque>
-#include <stack>
+#include <set>
 #include <array>
 #include <fstream>
 
@@ -26,6 +26,10 @@ struct Group {
 
 	operator std::string() const noexcept {
 		return (id.empty() ? "NO_ID" : id) + ',' + addr + ',' + std::to_string(port_num);
+	}
+
+	bool operator < (const Group & rhs) const noexcept {
+		return id < rhs.id && addr < rhs.addr && port_num < rhs.port_num;
 	}
 } self_group{SELF_GROUP_ID, {"130.208.243.61"}, {}};
 
@@ -46,7 +50,7 @@ std::condition_variable connected_groups_cv;
 std::mutex pending_connections_mtx;
 std::condition_variable pending_connections_cv;
 // holds groups received from SERVERS command. used to form new connections with botnet servers
-std::stack<Group> pending_connections;
+std::set<Group> pending_connections;
 
 namespace util {
 
@@ -216,7 +220,7 @@ void handle_client(Tcp_socket & client_sock){
 
 			{
 				std::lock_guard<std::mutex> guard(pending_connections_mtx);
-				pending_connections.push(std::move(group));
+				pending_connections.insert(std::move(group));
 			}
 
 			pending_connections_cv.notify_one();
@@ -319,12 +323,14 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 	auto on_servers_received = [&](){
 		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent SERVERS command");
 
-		std::vector<Group> new_groups;
-
 		for(std::size_t i = 4; i + 2 < tokens.size(); i += 3){
 			auto & group_id = tokens[i];
 			auto & ip = tokens[i + 1];
 			auto & port = tokens[i + 2];
+
+			if(group_id.empty()){
+				continue;
+			}
 
 			int port_num;
 
@@ -335,33 +341,16 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 				continue;
 			}
 
-			new_groups.emplace_back(Group{std::move(group_id), std::move(ip), port_num});
-		}
+			Group new_group{std::move(group_id), std::move(ip), port_num};
 
-		std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
-
-		for(auto & new_group : new_groups){
-
-			if(new_group.id.empty()){
-				continue;
+			{	// add group information to pending connections. other thread will use it to form new connections with botnet
+				std::lock_guard<std::mutex> pending_connections_guard(pending_connections_mtx);
+				pending_connections.insert(new_group);
 			}
 
-			for(const auto & pair : connected_groups){
-				const auto & connected_group = pair.second;
-
-				if(new_group.id == connected_group.id || new_group.id == SELF_GROUP_ID){
-					continue;
-				}
-
-				{	// add group information to pending connections. other thread will use it to form new connections with botnet
-					std::lock_guard<std::mutex> pending_connections_guard(pending_connections_mtx);
-					pending_connections.push(new_group);
-				}
-
-				// if connection limit isn't reached then inform other thread to form the connection
-				if(connected_groups.size() < MAX_CONNECTIONS){
-					pending_connections_cv.notify_one();
-				}
+			// if connection limit isn't reached then inform other thread to form the connection
+			if(connected_groups.size() < MAX_CONNECTIONS){
+				pending_connections_cv.notify_one();
 			}
 		}
 	};
@@ -528,7 +517,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 				}
 			}
 
-			std::this_thread::sleep_for(std::chrono::seconds(5));
+			std::this_thread::sleep_for(std::chrono::seconds(10));
 		}
 	});
 
@@ -543,7 +532,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 			for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
 				const auto cur_msg = msg.substr(1, eot_idx - 1);
-				util::log(std::cout, "RECEIVED MSG >>  ", cur_msg);
+				util::log(std::cout, "RECEIVED >> ", cur_msg);
 				msg = eot_idx + 1 < msg.size() ? msg.substr(eot_idx + 1) : "";
 
 				// convert the string into tokens for ease of parsing
@@ -735,26 +724,41 @@ int main(int argc, char ** argv){
 			return !pending_connections.empty();
 		});
 
-		const auto new_group = pending_connections.top();
-		pending_connections.pop();
-
+		const auto new_group = *pending_connections.begin();
+		pending_connections.erase(pending_connections.begin());
 		lock.unlock();
+
+		{
+			std::lock_guard<std::mutex> guard(connected_groups_mtx);
+
+			bool already_connected = false;
+
+			for(const auto & connected_group_p : connected_groups){
+				const auto & connected_group = connected_group_p.second;
+
+				if(connected_group.addr == new_group.addr && connected_group.port_num == new_group.port_num){
+					already_connected = true;
+					break;
+				}
+			}
+
+			if(already_connected){
+				continue;
+			}
+		}
 
 		util::log(std::cout, "attempting to connect to a new botnet server (", std::string(new_group), ")...");
 
-		std::thread([post_botnet_socket, new_group](){
+		try{
+			Tcp_socket botnet_sock;
+			botnet_sock.connect(new_group.addr.c_str(), new_group.port_num);
 
-			try{
-				Tcp_socket botnet_sock;
-				botnet_sock.connect(new_group.addr.c_str(), new_group.port_num);
+			util::log(std::cout, "connected to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
 
-				util::log(std::cout, "connected to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
+			post_botnet_socket(std::move(botnet_sock), std::move(new_group));
+		}catch(const std::exception & exception){
+			util::log<util::Log_type::ERROR>(std::cerr, exception.what());
+		}
 
-				post_botnet_socket(std::move(botnet_sock), std::move(new_group));
-			}catch(const std::exception & exception){
-				util::log<util::Log_type::ERROR>(std::cerr, exception.what());
-			}
-
-		}).detach();
 	}
 }
