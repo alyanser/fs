@@ -500,23 +500,33 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		{"STATUSRESP", on_statusresp_received},
 	};
 
+
+	std::thread sending_msgs_thread([&botnet_sock](){
+
+		while(true){
+			std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
+			auto & connected_group_id = connected_groups[botnet_sock.fd()].id;
+
+			std::lock_guard<std::mutex> pending_msgs_guard(pending_connections_mtx);
+
+			if(pending_msgs.count(connected_group_id)){
+				auto & pending_group_msgs = pending_msgs[connected_group_id];
+
+				try{
+					botnet_sock.send(craft::keepalive_packet(static_cast<int>(pending_group_msgs.size())));
+				}catch(const std::exception & exception){
+					return;
+				}
+			}
+
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+		}
+	});
+
 	// send the initial JOIN command
 	send_botnet_message(craft::join_packet());
 
 	while(true){
-
-		{	// check if there is any pending message for this 1-hop server, if so then send keepalive command
-			std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
-			const auto & botnet_server_group = connected_groups[botnet_sock.fd()].id;
-
-			std::lock_guard<std::mutex> pending_msgs_guard(pending_msgs_mtx);
-
-			if(pending_msgs.count(botnet_server_group)){
-				auto & pending_group_msgs = pending_msgs[botnet_server_group];
-				send_botnet_message(craft::keepalive_packet(static_cast<int>(pending_group_msgs.size())));
-			}
-		}
-
 		auto msg = botnet_sock.recv();
 
 		if(msg.empty()){ // the server closed the connection
@@ -545,6 +555,8 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			}
 		}
 	}
+
+	sending_msgs_thread.join();
 }
 
 int main(int argc, char ** argv){
@@ -579,7 +591,7 @@ int main(int argc, char ** argv){
 	util::log(std::cout, "starting the server with group-id: ", SELF_GROUP_ID, " ...");
 
 	// start client listener thread
-	std::thread client_listen_thread([client_port_num](){
+	std::thread([client_port_num](){
 		util::log(std::cout, "starting client thread...");
 		Tcp_socket client_listen_sock;
 
@@ -588,8 +600,6 @@ int main(int argc, char ** argv){
 		client_listen_sock.listen();
 
 		util::log(std::cout, "listening for clients on port # ", client_port_num, " ...");
-
-		std::vector<std::thread> client_threads;
 
 		while(true){
 
@@ -611,21 +621,15 @@ int main(int argc, char ** argv){
 					util::log(std::cout, "connection being closed with a client...");
 				}, std::move(client_sock));
 
-				client_threads.emplace_back(std::move(client_worker));
+				std::thread(std::move(client_worker)).detach();
 			}catch(const std::exception & exception){
 				util::log<util::Log_type::ERROR>(std::cerr, exception.what());
 			}
 		}
-
-		for(auto & client_thread : client_threads){
-			client_thread.join();
-		}
-	});
-
-	std::vector<std::thread> botnet_threads;
+	}).detach();
 
 	// initiates a separate thread for botnet server
-	auto post_botnet_socket = [&botnet_threads](Tcp_socket botnet_sock, Group associated_group){
+	auto post_botnet_socket = [](Tcp_socket botnet_sock, Group associated_group){
 
 		{
 			std::lock_guard<std::mutex> guard(connected_groups_mtx);
@@ -651,12 +655,12 @@ int main(int argc, char ** argv){
 			connected_groups_cv.notify_one();
 
 		}, std::move(botnet_sock));
-		
-		botnet_threads.emplace_back(std::move(botnet_worker));
+
+		std::thread(std::move(botnet_worker)).detach();
 	};
 
 	// start botnet listener thread
-	std::thread botnet_listen_thread([post_botnet_socket](){
+	std::thread([post_botnet_socket](){
 		util::log(std::cout, "starting botnet thread...");
 
 		Tcp_socket botnet_listen_sock;
@@ -709,7 +713,7 @@ int main(int argc, char ** argv){
 				util::log<util::Log_type::ERROR>(std::cerr, exception.what());
 			}
 		}
-	});
+	}).detach();
 
 	// main thread itself checks if there are any pending connections, if so then attempts to those botnet servers
 	while(true){
@@ -720,30 +724,26 @@ int main(int argc, char ** argv){
 		});
 
 		auto new_group = std::move(pending_connections.top());
+		util::log(std::cout, "DEBUG >> ", std::string(new_group));
 		pending_connections.pop();
 
 		lock.unlock();
 
 		util::log(std::cout, "attempting to connect to a new botnet server (", std::string(new_group), ")...");
 
-		try{
-			Tcp_socket botnet_sock;
-			botnet_sock.connect(new_group.addr.c_str(), new_group.port_num);
+		std::thread([post_botnet_socket, new_group](){
 
-			util::log(std::cout, "connected to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
+			try{
+				Tcp_socket botnet_sock;
+				botnet_sock.connect(new_group.addr.c_str(), new_group.port_num);
 
-			post_botnet_socket(std::move(botnet_sock), std::move(new_group));
-		}catch(const std::exception & exception){
-			util::log<util::Log_type::ERROR>(std::cerr, exception.what());
-		}
+				util::log(std::cout, "connected to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
+
+				post_botnet_socket(std::move(botnet_sock), std::move(new_group));
+			}catch(const std::exception & exception){
+				util::log<util::Log_type::ERROR>(std::cerr, exception.what());
+			}
+
+		}).detach();
 	}
-
-	// join all threads
-
-	for(auto & botnet_thread : botnet_threads){
-		botnet_thread.join();
-	}
-
-	botnet_listen_thread.join();
-	client_listen_thread.join();
 }
