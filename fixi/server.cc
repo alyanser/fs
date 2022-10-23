@@ -500,7 +500,6 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		{"STATUSRESP", on_statusresp_received},
 	};
 
-
 	std::thread sending_msgs_thread([&botnet_sock](){
 
 		while(true){
@@ -530,7 +529,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		auto msg = botnet_sock.recv();
 
 		if(msg.empty()){ // the server closed the connection
-			return;
+			break;
 		}
 
 		for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
