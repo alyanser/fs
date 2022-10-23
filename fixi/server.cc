@@ -25,7 +25,7 @@ struct Group {
 	int port_num;
 
 	operator std::string() const noexcept {
-		return id + ',' + addr + ',' + std::to_string(port_num);
+		return (id.empty() ? "NO_ID" : id) + ',' + addr + ',' + std::to_string(port_num);
 	}
 } self_group{SELF_GROUP_ID, {"130.208.243.61"}, {}};
 
@@ -209,6 +209,21 @@ void handle_client(Tcp_socket & client_sock){
 			}
 
 			client_sock.send("message has been added to pending queue");
+		}else if(cmd == "CONNECT"){
+			util::log(std::cout, "CONNECT command received from a client. responding accordingly");
+
+			Group group;
+			group.addr = std::move(tokens[1]);
+			group.port_num = std::stoi(tokens[2]);
+
+			{
+				std::lock_guard<std::mutex> guard(pending_connections_mtx);
+				pending_connections.push(std::move(group));
+			}
+
+			pending_connections_cv.notify_one();
+
+			client_sock.send("connection successfully added to pending connections stack");
 		}else{
 			// this shouldn't happen because client already parses the commands but just to be safe
 			util::log(std::cout, "invalid command receieved from client");
@@ -309,8 +324,8 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 	auto on_servers_received = [&](){
 
-		// if size of tokens is odd, that means there is extraneous comma in the packet so just ignore
-		if(tokens.size() & 1){
+		// if size of tokens is even, that means there is extraneous comma in the packet so just ignore
+		if(tokens.size() % 2 == 0){
 			on_invalid_command_received();
 			return;
 		}
@@ -552,7 +567,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 int main(int argc, char ** argv){
 
-	if(argc < 2 && argc > 3){
+	if(argc < 2 || argc > 3){
 		std::cerr << "Usage: " << argv[0] << " botnet_port_number client_port_number(DEFAULT=" << DEFAULT_CLIENT_PORT_NUM << ")\n";
 		return 1;
 	}
@@ -727,11 +742,14 @@ int main(int argc, char ** argv){
 
 		lock.unlock();
 
-		util::log(std::cout, "attempting to connect to botnet server received from SERVERS command...");
+		util::log(std::cout, "attempting to connect to a new botnet server...");
 
 		try{
 			Tcp_socket botnet_sock;
 			botnet_sock.connect(new_group.addr.c_str(), new_group.port_num);
+
+			util::log(std::cout, "connceted to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
+
 			post_botnet_socket(std::move(botnet_sock), std::move(new_group));
 		}catch(const std::exception & exception){
 			util::log<util::Log_type::ERROR>(std::cerr, exception.what());

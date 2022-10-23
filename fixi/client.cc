@@ -34,7 +34,7 @@ int main(int argc, char ** argv){
 	auto print_prompt = [](){
 		std::cout << "---------------------------------------------------------\n"
 			"Available commands: (Substitute GROUP_ID and MSG accordingly)"
-			"\n\n-> QUERYSERVERS\n-> SEND,GROUP_ID,MESSAGE\n-> FETCH,GROUP_ID\n-> EXIT\n> ";
+			"\n\n-> QUERYSERVERS\n-> SEND,GROUP_ID,MESSAGE\n-> FETCH,GROUP_ID\n-> CONNECT,IP,PORT\n-> EXIT\n> ";
 	};
 
 	// start the main loop which communicates with the server
@@ -75,6 +75,31 @@ int main(int argc, char ** argv){
 				const auto group_id = input.substr(first_delim + 1);
 				sock.send("FETCH," + group_id);
 
+				const auto response = sock.recv();
+				std::cout << "Server: " << response << '\n';
+			}else if(cmd == "CONNECT"){
+				const auto second_delim = input.find(',', first_delim + 1);
+
+				if(second_delim == std::string::npos){
+					std::cerr << "ERROR: invalid command format\n";
+					continue;
+				}
+
+				const auto ip_addr = input.substr(first_delim + 1, second_delim - first_delim - 1);
+				const auto port_num_str = input.substr(second_delim + 1);
+
+				int port_num;
+
+				try{
+					port_num = std::stoi(port_num_str);
+				}catch(const std::exception & exception){
+					std::cerr << "ERROR: invalid port number\n";
+					continue;
+				}
+
+				static_cast<void>(port_num);
+
+				sock.send("CONNECT," + ip_addr + ',' + port_num_str);
 				const auto response = sock.recv();
 				std::cout << "Server: " << response << '\n';
 			}else{
