@@ -63,8 +63,6 @@ std::vector<std::string> tokenize_string(const std::string & str, const std::vec
 			if(!token.empty()){
 				tokens.emplace_back(std::move(token));
 				token.clear();
-			}else{
-				return {};
 			}
 		}else{
 			token += c;
@@ -235,7 +233,7 @@ void handle_client(Tcp_socket & client_sock){
 namespace craft { // crafting messages based on the specification
 
 std::string fetch_msg_packet(const std::string & group_id) noexcept {
-	return "FETCH," + group_id;
+	return "FETCH_MSGS," + group_id;
 }
 
 std::string send_msg_packet(const std::string & to_group_id, const std::string & from_group_id, const std::string & msg) noexcept {
@@ -288,19 +286,8 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 	std::vector<std::string> tokens;
 
-	auto on_invalid_command_received = [&botnet_sock, &tokens](){
-#ifdef PRINT_INVALID_CMDS
-		std::string invalid_cmd;
-
-		for(const auto & token : tokens){
-			invalid_cmd += token + ',';
-		}
-
-	util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command : ", invalid_cmd);
-
-#else
-	util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command. ");
-#endif
+	auto on_invalid_command_received = [&botnet_sock](){
+		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command. ");
 	};
 
 	auto on_join_received = [&](){
@@ -323,13 +310,6 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 	};
 
 	auto on_servers_received = [&](){
-
-		// if size of tokens is even, that means there is extraneous comma in the packet so just ignore
-		if(tokens.size() % 2 == 0){
-			on_invalid_command_received();
-			return;
-		}
-
 		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent SERVERS command");
 
 		std::vector<Group> new_groups;
@@ -394,7 +374,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			return;
 		}
 
-		if(no_of_msgs > 0){ // if the sending botnet server has a message for us, send a FETCH_MSGS command
+		if(no_of_msgs > 0){ // if the botnet server has any message for us, send FETCH_MSGS command
 			util::log(std::cout, "sending FETCH_MSG command to botnet server # ", botnet_sock.fd());
 			send_botnet_message(craft::fetch_msg_packet(SELF_GROUP_ID));
 		}
@@ -469,8 +449,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 
 	auto on_statusresp_received = [&](){
 
-		// if tokens size is not even that means there are some extraneous delimeters in the packet so ignore
-		if(tokens.size() > 2 && tokens.size() % 2 == 0){
+		if(tokens.size() < 3){
 			on_invalid_command_received();
 			return;
 		}
@@ -536,31 +515,31 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			}
 		}
 
-		const auto msg = botnet_sock.recv();
+		auto msg = botnet_sock.recv();
 
 		if(msg.empty()){ // the server closed the connection
 			return;
 		}
 
-		if(msg.size() < 2 || (msg.front() != SOH && msg.back() != EOT)){ // invalid packet
-			on_invalid_command_received();
-			continue;
-		}
+		for(std::size_t eot_idx; !msg.empty() && msg.front() == SOH && (eot_idx = msg.find(EOT)) != std::string::npos;){
+			const auto cur_msg = msg.substr(1, eot_idx);
+			msg = eot_idx + 1 < msg.size() ? msg.substr(eot_idx + 1) : "";
 
-		// convert the string into tokens for ease of parsing
-		tokens = util::tokenize_string(msg.substr(1, msg.size() - 2), {';', ','});
+			// convert the string into tokens for ease of parsing
+			tokens = util::tokenize_string(cur_msg, {';', ','});
 
-		if(tokens.empty()){ // invalid packet
-			on_invalid_command_received();
-			continue;
-		}
+			if(tokens.empty()){ // invalid packet
+				on_invalid_command_received();
+				continue;
+			}
 
-		const auto & cmd = tokens.front();
+			const auto & cmd = tokens.front();
 
-		try{
-			cmd_mapping.at(cmd)(); // call the specific handler
-		}catch(const std::exception & exception){
-			on_invalid_command_received();
+			try{
+				cmd_mapping.at(cmd)(); // call the specific handler
+			}catch(const std::exception & exception){
+				on_invalid_command_received();
+			}
 		}
 	}
 }
@@ -748,7 +727,7 @@ int main(int argc, char ** argv){
 			Tcp_socket botnet_sock;
 			botnet_sock.connect(new_group.addr.c_str(), new_group.port_num);
 
-			util::log(std::cout, "connceted to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
+			util::log(std::cout, "connected to new botnet server. address: ", new_group.addr, ". port: ", new_group.port_num);
 
 			post_botnet_socket(std::move(botnet_sock), std::move(new_group));
 		}catch(const std::exception & exception){
