@@ -1,0 +1,9 @@
+OS: Linux
+
+Run 'make' to compile server.cc and client.cc into two separate binaries namely 'tsamP3_GROUP_2' and 'client'.
+
+Run 'tsamP3_GROUP_2' to start the server, providing the listening port number on command line. It will listen for clients on port 9001.
+
+Use 'client' to communicate with the server, providing the server address and port number on command line. The client will prompt for a password to authenticate with the server. Use 'ilovecats' to authenticate.
+
+Sent and received messages will be logged into a file 'message-logs.txt' along with the timestamps.
