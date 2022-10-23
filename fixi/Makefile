@@ -1,6 +1,6 @@
 CXX=g++
-WARNINGS=-Wall -Wextra -pedantic -Wconversion -Wshadow
-CXXFLAGS=-std=c++11 -O2 $(WARNINGS) -lpthread -DPRINT_INVALID_CMDS
+WARNINGS=-Wall -Wextra -pedantic -Wconversion -Wshadow -fsanitize=undefined,address
+CXXFLAGS=-std=c++11 -O0 $(WARNINGS) -lpthread
 
 .PHONY: all clean
 

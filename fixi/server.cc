@@ -286,10 +286,15 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 	};
 
 	std::vector<std::string> tokens;
-	std::string msg;
 
-	auto on_invalid_command_received = [&botnet_sock, &msg](){
-		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command >> ", msg);
+	auto on_invalid_command_received = [&botnet_sock, &tokens](){
+		std::string cmd;
+
+		for(const auto & str : tokens){
+			cmd += str + ',';
+		}
+
+		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent an invalid/malformed command >> ", cmd);
 	};
 
 	auto on_join_received = [&](){
@@ -302,8 +307,9 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 		util::log(std::cout, "botnet server # ", botnet_sock.fd(), " sent JOIN command");
 
 		{	// update the group id of the botnet server
-			std::lock_guard<std::mutex> guard(connected_groups_mtx);
 			util::log(std::cout, "botnet server # ", botnet_sock.fd(), " identified their group id: ", tokens.back());
+
+			std::lock_guard<std::mutex> guard(connected_groups_mtx);
 			connected_groups[botnet_sock.fd()].id = std::move(tokens.back());
 		}
 
@@ -320,11 +326,6 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			auto & group_id = tokens[i];
 			auto & ip = tokens[i + 1];
 			auto & port = tokens[i + 2];
-
-			if(group_id.empty()){
-				on_invalid_command_received();
-				continue;
-			}
 
 			int port_num;
 
@@ -508,7 +509,6 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			std::lock_guard<std::mutex> connected_groups_guard(connected_groups_mtx);
 			const auto & botnet_server_group = connected_groups[botnet_sock.fd()].id;
 
-			util::log(std::cout, "DEBUG SERVER GROUP ID >> ", botnet_server_group);
 			std::lock_guard<std::mutex> pending_msgs_guard(pending_msgs_mtx);
 
 			if(pending_msgs.count(botnet_server_group)){
@@ -517,7 +517,7 @@ void handle_botnet_server(Tcp_socket & botnet_sock){
 			}
 		}
 
-		msg = botnet_sock.recv();
+		auto msg = botnet_sock.recv();
 
 		if(msg.empty()){ // the server closed the connection
 			return;
